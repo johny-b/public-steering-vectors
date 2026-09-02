@@ -1,0 +1,254 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "steering-vectors"
+version = "0.1.0"
+description = "Inspect AI evals and model providers"
+requires-python = ">=3.10"
+dependencies = [
+    # Pinned: steered_provider subclasses inspect_ai's OpenAICompatibleAPI, which
+    # is a private module with no stability guarantee across releases.
+    "inspect_ai==0.3.259",
+    # Model provider SDKs are not inspect_ai runtime deps; these are the floors
+    # it enforces for the agent and judge models.
+    # Upper bound is load-bearing, not hygiene. anthropic 1.x removed
+    # `temperature` from the typed signatures of both `messages.create()` and
+    # `messages.stream()`, while the HTTP API still accepts it. inspect_ai
+    # forwards `GenerateConfig.temperature` into those calls, so under 1.x every
+    # judge call raises TypeError and the run is scored `error` rather than
+    # failing loudly -- a whole judge column silently turns to noise. Keep <1
+    # until inspect_ai routes temperature around the SDK's signature.
+    "anthropic>=0.115.0,<1",
+    "openai>=3.1.0",
+    # Imported directly by the evals; both also ship as inspect_ai dependencies.
+    "beautifulsoup4>=4.12.3",
+    "pydantic>=2.13.0",
+    # Loads the official Impossible-LiveCodeBench splits and the pinned
+    # MathArena HMMT revision from Hugging Face.
+    "datasets>=3.0.0",
+    # Symbolic answer equivalence for hmmt. 17 of the 33 HMMT Feb 2026 answers
+    # are non-integer LaTeX (\sqrt{69}, 3+\sqrt{11}, 74^\circ), so string and
+    # integer comparison decide only part of the set and the rest needs a CAS.
+    # Not optional, and its ImportError is deliberately not swallowed: without
+    # it every symbolic answer would score zero and the run would read as a
+    # capability drop rather than as a broken environment. Capped below 1.0
+    # because equivalence semantics are the eval's definition of correct, and a
+    # major version is where a library is entitled to change them.
+    "math-verify>=0.9,<1",
+    # machiavelli downloads its ~3.4 GB of game data from a Hugging Face dataset
+    # repository. `datasets` above cannot serve it: the games ship as a
+    # password-protected zip of JSON, not as a dataset. trait_bench uses the
+    # same route for a different reason: its dataset repository declares
+    # per-trait splits that drop the `idx` column, so it fetches the parquet
+    # file directly, at a pinned revision, and verifies its sha256.
+    "huggingface-hub>=0.26",
+    # trait_bench reads that parquet with `pyarrow.parquet`, so pyarrow is a
+    # direct import rather than something inherited from `datasets`. The floor
+    # is not a guess and not a new constraint: `datasets>=3.0.0` above already
+    # requires `pyarrow>=15.0.0` at its own floor, so this pins what the tree
+    # would install anyway and makes the dependency visible to anyone reading
+    # the import.
+    "pyarrow>=15",
+    # The MACHIAVELLI ChoiceScript interpreter evaluates game expressions with
+    # asteval rather than eval(), so a game's source cannot reach the process.
+    "asteval>=1.0",
+    # steering_vectors reads the .npy arrays in vectors/. The metadata half of
+    # that package is stdlib-only and numpy is imported inside the functions
+    # that return an array, so a machine that only reads meta.json never needs
+    # it — but loading a vector does, so it is a runtime dependency. The
+    # MACHIAVELLI interpreter also sees numpy scalars come back out of asteval.
+    "numpy>=1.26",
+    # app/ is the one interactive surface in this repository: a Gradio page that
+    # talks to the served model over the OpenAI-compatible route. `openai` is
+    # already above, for the evals; `gradio` is here and nowhere else. Neither
+    # ships in the wheel — `app/` is not a package and the `include` filter below
+    # is what keeps it that way — so this is a dependency of running the tree,
+    # which is how the app is run.
+    "gradio>=5.0",
+]
+
+[project.optional-dependencies]
+# CPU-side tokenizer dependency for vector construction. vLLM and torch remain
+# intentionally absent: install vLLM==0.26.0 separately in the GPU environment,
+# using the CUDA-specific wheel appropriate for that host.
+builder = [
+    "transformers",
+]
+# Terminal-Bench 2.1 and SWE-bench Pro are served officially through harbor,
+# and this is the adapter between harbor tasks and inspect_ai. It is an extra
+# rather than a dependency because it declares `Requires-Python >=3.12` and
+# this repository supports 3.10; installing it in the base set would raise the
+# floor for evals that need nothing from it.
+#
+# Pinned exactly, not bounded. The wrappers in inspect_evals/harbor_common/ are
+# a thin layer over adapter code that was read line by line before it was
+# trusted -- its scorer's raise semantics, its reward-file precedence, its 6 GB
+# memory floor and the task.toml fields it drops in silence are all recorded in
+# those docstrings against this exact version, and a range would let those
+# statements go stale without a diff. 0.7.4 is also the release whose own floor
+# is `inspect-ai>=0.3.259`, which is the version pinned above.
+#
+# Known conflict, and the reason `pip install -e '.[harbor]'` does not resolve
+# on its own: inspect-harbor requires harbor >=0.21, harbor requires litellm
+# >=1.92, and every litellm from 1.92 on caps `openai<3.0.0`. The base
+# dependency set above needs `openai>=3.1.0`, because inspect_ai 0.3.259's
+# OpenAI-compatible provider (which `steered` subclasses) imports modules that
+# only exist in openai 3.x. Nothing on the harbor path imports litellm, or
+# openai: verified by loading the whole 89-task dataset and checking
+# `sys.modules`. litellm is a dependency of harbor's own agents and CLI, which
+# this repository does not use. So the combination is fine at runtime and only
+# the resolver objects. Install it in three steps, in this order:
+#
+#   pip install -e .
+#   pip install inspect-harbor==0.7.4   # this downgrades openai to 2.x
+#   pip install 'openai>=3.1.0'         # put it back
+#
+# The last step leaves pip reporting that litellm's `openai<3` requirement is
+# unsatisfied. That is the state this eval was validated in.
+harbor = [
+    "inspect-harbor==0.7.4",
+]
+
+[project.scripts]
+build-steering-vector = "steering_vectors.build.cli:main"
+
+# Capture uses vLLM's private architecture replacement mechanism before weights
+# load. The entry point is inert unless the worker sets its capture-only mode.
+[project.entry-points."vllm.general_plugins"]
+steering_vectors_capture = "steering_vectors.capture_engine.plugin:register"
+
+# inspect resolves the --model string before it imports the task file, so the
+# provider has to be discoverable through the entry point rather than an import.
+[project.entry-points.inspect_ai]
+steered = "steered_provider"
+
+# inspect_evals/ and inspect_providers/ are grouping directories, not packages:
+# the importable names are `agentic_misalignment`, `ctfish`, `harbor_common`,
+# `hmmt`, `impossiblebench`, `machiavelli`, `school_of_reward_hacks`,
+# `swe_bench_pro`, `terminal_bench_2`, `trait_bench`, `trait_openended`,
+# `truthfulqa`, and `steered_provider`.
+# `trait_bench` rather than `trait` because the short name is taken on PyPI and
+# a name collision here would be resolved by import order rather than by intent.
+# Do not add an __init__.py to either grouping directory — `inspect_evals` is
+# also a package on PyPI, and taking that name here would shadow it. The eval
+# package names avoid PyPI collisions for the same reason: `trait_openended`
+# rather than anything shorter that someone else already publishes.
+#
+# One of the names below is taken on PyPI by an unrelated project:
+# `machiavelli` (a card-game solver). It is not a dependency of anything here
+# and would not be installed into this environment on purpose, so the collision
+# is accepted rather than worked around: co-installing it would shadow ours or
+# be shadowed by it, depending on path order. Recorded so the next reader does
+# not have to rediscover it — this is the same hazard as the `inspect_evals`
+# note above, with a much smaller blast radius.
+#
+# `harbor_common` is not an eval: it is the shared, audited seam onto
+# inspect_harbor that `terminal_bench_2` and `swe_bench_pro` both score
+# through. It ships in the base install and imports nothing from harbor, so
+# that its guard module can be what explains a missing `.[harbor]` extra.
+# It is also the repository's only shared eval module, and deliberately so:
+# the module is a compensation for specific audited behaviours of a pinned
+# third-party release, so a second copy would be a second thing to re-read
+# against the adapter on every bump, and two copies that had drifted apart
+# would defeat the audit that justifies trusting either.
+#
+# `terminal_bench_2` rather than `terminal_bench`: `terminal-bench` is taken on
+# PyPI, and the bare import name would shadow it.
+#
+# `swe_bench_pro` ships two tasks from one module, `swe_bench_pro` and
+# `swe_bench_pro_isolated`, which are the same 731 instances in two harbor
+# packages: Scale AI's and the CAIS anti-exploitation repackaging. Both need
+# the `harbor` extra to run and neither needs it to import, which is what lets
+# `scripts/validate_swe_bench_pro.py` produce the actionable install error
+# rather than a ModuleNotFoundError. There is no PyPI collision to avoid here:
+# the name is free, and `swebench` (the original benchmark's harness) is a
+# different distribution that this repository does not depend on.
+#
+# `steering_vectors` is an ordinary top-level package and sits at the root, so
+# the root is a third search directory. `include` is what keeps that from
+# sweeping in the rest of the tree: find treats every directory as a namespace
+# package by default, so an unfiltered "." would package pod/, scripts/ and
+# inspect_evals/ itself alongside the real packages listed below.
+[tool.setuptools.packages.find]
+where = [".", "inspect_evals", "inspect_providers"]
+include = [
+    "agentic_misalignment*",
+    "ctfish*",
+    "harbor_common*",
+    "hmmt*",
+    "impossiblebench*",
+    "machiavelli*",
+    "school_of_reward_hacks*",
+    "steered_provider*",
+    "steering_vectors*",
+    "swe_bench_pro*",
+    "terminal_bench_2*",
+    "trait_bench*",
+    "trait_openended*",
+    "truthfulqa*",
+]
+
+[tool.setuptools.package-data]
+ctfish = ["judge.txt", "env/*"]
+# hmmt is trait_bench's case exactly: the 33 problems and their answers are
+# CC BY-NC-SA 4.0, are fetched at run time and are never vendored, so PROVENANCE
+# is what takes the place of a copy -- the pinned revision, the answer-key
+# digest, the reference harness the grader was ported from, and the regrade that
+# says the port agrees with it. Same reason to ship it in the wheel.
+hmmt = ["PROVENANCE"]
+impossiblebench = ["UPSTREAM_LICENSE"]
+machiavelli = ["UPSTREAM_LICENSE"]
+# terminal_bench_2 and swe_bench_pro vendor nothing either: their task
+# definitions and their images are fetched at run time from pinned harbor
+# digests, so there is no copy for a PROVENANCE to sit beside. What these two
+# files hold instead is the measurement -- which of the 89 Terminal-Bench tasks
+# this harness can score at all, and why the SWE-bench Pro wrapper overrides the
+# adapter's verifier shell on all 280 Go tasks -- and that is exactly what an
+# installed tree is asked to justify when someone reads a number off a run.
+# Same reason as hmmt and trait_bench.
+swe_bench_pro = ["PROVENANCE"]
+terminal_bench_2 = ["PROVENANCE"]
+# trait_bench vendors no data -- the items are fetched at run time and their
+# sha256 checked. PROVENANCE is what takes the place of a vendored copy: the
+# dataset revision and digest, the upstream commit the prompt templates and
+# scoring arithmetic came from, and every deviation from them. It ships in the
+# wheel so an installed copy can still answer "where did this number come
+# from" without the repository.
+trait_bench = ["PROVENANCE"]
+# agentic_misalignment builds every prompt at task construction time by reading
+# the markdown under templates/, so those files are the eval rather than
+# documentation of it. templates/ carries no __init__.py upstream and this port
+# does not add one, so `find` above never sees it as a package and it has to
+# ship as data — including system_prompt_templates.py, which is imported
+# through the implicit namespace package. eval.yaml records the upstream task
+# version that agentic_misalignment.py copies into the log.
+agentic_misalignment = [
+    "UPSTREAM_LICENSE",
+    "eval.yaml",
+    "templates/*.py",
+    "templates/**/*.md",
+]
+# The two judge templates are the eval's measuring instrument and are read from
+# disk verbatim at scoring time; data/ holds the 306-row subset the dataset is
+# built from, plus the provenance of how it was drawn. All of it is data rather
+# than code, so `find` never sees it and it has to ship explicitly.
+school_of_reward_hacks = [
+    "judge1_metric_prompt.txt",
+    "judge2_quality_prompt.txt",
+    "data/*.jsonl",
+    "data/*.json",
+    "data/*.txt",
+]
+# trait_openended reads its question bank and its judge rubric at run time and
+# checks their sha256 against the digests in the code, so both files are the
+# eval rather than documentation of it: an install without them cannot run the
+# task at all. They are vendored because they have no upstream to fetch from —
+# see inspect_evals/trait_openended/data/PROVENANCE, which ships alongside them
+# so an installed copy carries its own provenance.
+trait_openended = [
+    "data/openended_questions.jsonl",
+    "data/judge_rubric.txt",
+    "data/PROVENANCE",
+]

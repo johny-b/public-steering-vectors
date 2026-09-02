@@ -1,0 +1,380 @@
+HMMT Feb 2026 -- provenance of everything that came from somewhere else
+=======================================================================
+
+Recorded 2026-09-02. Nothing in this directory is a copy of the benchmark. The
+33 problems and their answers are fetched at run time from a pinned dataset
+revision and are never vendored, because the set is CC BY-NC-SA 4.0
+(`dataset.py` module docstring; the README's "Running HMMT Feb 2026" section
+repeats the claim). What is reproduced here is the reference harness's grader
+semantics and its judge prompt, both of which are the instrument: a grader that
+disagreed with the saved reference runs would make those records useless as an
+audit and would silently redefine the benchmark (`grader.py` module docstring).
+
+Every fact below is cited to the file it was read from. Where a number came
+from a run rather than from a constant, the run is named. The `capability-evals`
+runs of the internal `jevals` reference harness live in a private steering-tools
+workspace; their records are available to maintainers and are not shipped here,
+which is how `hmmt.py`, `grader.py` and `judge.py` all describe them.
+
+
+1. The benchmark
+----------------
+
+Competition The Harvard-MIT Mathematics Tournament, February 2026, as released
+            by MathArena (https://matharena.ai,
+            https://github.com/eth-sri/matharena). (`hmmt.py` module docstring)
+
+Size        33 problems with one final answer each: the 30 individual-round
+            problems plus the 3 extras MathArena scores with them. Asserted at
+            load time, because a silently short dataset scores a different
+            benchmark under the same name. (`dataset.HMMT_FEB_2026_PROBLEMS`)
+
+Answers     17 of the 33 are non-integer LaTeX -- `\sqrt{69}`, `3+\sqrt{11}`,
+            `74^\circ`. That is why the two AIME scorers already published for
+            Inspect cannot be reused: both assume an integer answer.
+            (`hmmt.py` module docstring; the README repeats the count)
+
+Protocol    avg@4, which is MathArena's protocol for this competition.
+            `Epochs(4, "mean")` reduces the four attempts at a problem to that
+            problem's success rate before any metric sees them, which is what
+            makes the headline the mean over problems rather than over
+            generations. (`hmmt.DEFAULT_EPOCHS`)
+
+
+2. The dataset
+--------------
+
+Repository  https://huggingface.co/datasets/MathArena/hmmt_feb_2026
+            (`dataset.HMMT_FEB_2026_PATH`)
+Split       `train` -- the only split, loaded through `hf_dataset`.
+            (`dataset.hmmt_dataset`)
+Revision    02fba4f74d8e68e73e66a02d540fd979c05c274c
+            (`dataset.HMMT_FEB_2026_REVISION`)
+Licence     CC BY-NC-SA 4.0. (`dataset.py` module docstring; README)
+Fields read `problem_idx`, `problem`, `answer`, `problem_type`. A missing one
+            is an error, never a skip, and blank counts as missing: a blank gold
+            would otherwise load as a sample that can never be graded, scoring 0
+            forever and reading as a very hard problem.
+            (`dataset.REQUIRED_FIELDS`)
+
+Why the pin. MathArena edits its competition sets after publication -- typos,
+re-tagged subjects, occasionally a corrected answer. Without a pin, two runs a
+month apart are two benchmarks under one name.
+(`dataset.HMMT_FEB_2026_REVISION` docstring)
+
+The answer key is pinned by digest rather than copied:
+
+  sha256    eb35eb8245934bea78fb38599e4484c363a7b59648d01c949fd7d2e7a10d4947
+
+computed over `"{problem_idx}\t{answer}"` lines, sorted by problem index and
+joined with newlines. A digest rather than the 33 answers themselves, precisely
+so that the "never vendored" claim stays true.
+(`scripts/validate_hmmt.py`, `ANSWER_KEY_SHA256` and `answer_key_sha256`;
+checked by `--check dataset`, which also grades every gold answer against
+itself)
+
+One known shape in the raw data, handled at load: `problem_type` arrives as a
+list of subject tags with leading whitespace on the tags that follow a comma
+(`' Geometry'`, verified at the pinned revision). The tags are stripped so that
+a per-subject breakdown groups correctly instead of splitting Geometry into two
+subjects. (`dataset._sample`)
+
+
+3. The prompt
+-------------
+
+`REASONING_PROMPT_SUFFIX` is the default instruction appended to each problem:
+
+  "\n\nPlease reason step by step, and put your final answer within \boxed{}."
+
+  sha256  e4af2c73eebe21e7b31b929aad972d553a3143da0cd5b76cd51e42468a32286d
+
+It is kept exactly as it is rather than tidied, because it is the wording behind
+the reference runs, recorded in their run configs under that hash, and their
+unsteered avg@4 of 0.8409 sits next to the 84.3 MathArena publishes for the same
+model on this competition. The prompt is one of three things that number depends
+on; the other two are the serving stack and `REFERENCE_SAMPLING`.
+(`hmmt.REASONING_PROMPT_SUFFIX`; the hash is pinned as
+`scripts/validate_hmmt.py: REASONING_SUFFIX_SHA256` and checked by
+`--check grader`)
+
+`MATHARENA_PROMPT_SUFFIX` carries MathArena's own instruction for this
+competition, verbatim from `configs/competitions/hmmt/hmmt_feb_2026.yaml` in
+eth-sri/matharena. One deviation, deliberate: MathArena puts the instruction
+before the problem (`runner.py` appends `"\n\n{problem}"` to the instruction
+when the template has no `{problem}` placeholder), while this eval appends it.
+The position is documented rather than parameterised, so both constants drop
+into the same `prompt_suffix` slot, and `prompt_suffix_sha256` in the task
+metadata records which one a run used. (`hmmt.MATHARENA_PROMPT_SUFFIX`)
+
+
+4. The grader, and what was changed in porting it
+-------------------------------------------------
+
+`grader.py` is a port of `jevals/grading.py` from the internal reference
+harness, which produced the runs this eval is cross-validated against. Its
+rules, in order (`grader.py` module docstring):
+
+  1. Grade only the final channel. A `\boxed{}` written while the model is
+     still thinking is a draft, not an answer. (`grader.strip_thinking`)
+  2. Take the last `\boxed{...}`, with the closing brace found by counting
+     rather than by regex, because `\boxed{\frac{1}{2}}` nests.
+     (`grader.extract_boxed`)
+  3. Normalise display conventions that carry no mathematical content --
+     `\dfrac` vs `\frac`, `\left`/`\right`, thin spaces, `1{,}234`. Deliberately
+     conservative: anything that could change the value is left to math-verify.
+     (`grader.normalize`)
+  4. Compare cheaply first and symbolically last -- exact string, then integer,
+     then math-verify -- and record which rung decided, so the results table
+     says how much machinery the verdicts needed.
+     (`grader.GRADING_METHODS` = `("exact", "int", "math-verify", "none")`;
+     `grading_method_share` emits the full fixed key set even for a run in which
+     some rung never fires, because Inspect needs the key set to be constant)
+
+Three outcomes are kept apart and never folded together: a wrong answer, a parse
+failure (no `\boxed{}` at all, labelled `none`), and `verifier_failed` (a
+symbolic comparison that could not be made). The headline accuracy still scores
+a parse failure zero, which is how the published numbers treat a missing answer,
+but half this dataset's answers are decided by math-verify, so a broken verifier
+would otherwise look exactly like a model that lost half its mathematics.
+(`grader.py` module docstring)
+
+Two deliberate departures from the harness's function, neither of which changes
+a single verdict on the 396 saved reference records:
+
+  a. `strip_thinking` also refuses an unterminated thinking block. Take
+     everything after the last `</think>`, then drop everything from an unclosed
+     `<think>` onwards, in that order. The order matters: a model that answers,
+     reconsiders and is cut off mid-revision produces a closed pair followed by
+     an unclosed one, and testing for the closer first would hand the draft back
+     as the final answer. The reference runs were produced under the
+     separated-reasoning representation -- 0 of the 396 saved records contain
+     either tag -- so the addition cannot change any verdict it is compared
+     against. (`grader.strip_thinking`)
+
+  b. `gold_in_content` refuses a lenient match that sits inside a longer number.
+     `normalize` deletes all whitespace, so the gold `10` occurs inside `110`,
+     `2010` and `10.5`, and nine of the 33 answers are three characters or
+     fewer. Measured over the 396 reference records, the rate at which a record
+     wins lenient credit for a gold belonging to a different problem is 2.38%
+     with a bare substring test and 1.50% with the boundary rule, and the rule
+     changes none of the reference verdicts -- 0, 2 and 7 lenient hits across
+     the three arms, the same records, which is what keeps this comparable with
+     their `metrics.json`. The rule was verified against the harness's manual
+     review of the -2 arm: exactly 7 hits among its 43 non-correct records and 0
+     among the unsteered arm's. It is still not clean, and `lenient` is
+     documented as an upper bound rather than an accuracy.
+     (`grader.gold_in_content`)
+
+
+5. math-verify, and the timeout that had to be re-implemented
+-------------------------------------------------------------
+
+Dependency  `math-verify>=0.9,<1`, a direct dependency rather than an optional
+            one, and its ImportError is deliberately not swallowed: without it
+            every symbolic answer would score zero and the run would read as a
+            capability drop rather than as a broken environment. Capped below
+            1.0 because equivalence semantics are the eval's definition of
+            correct, and a major version is where a library is entitled to
+            change them. (`pyproject.toml`, with that reasoning written beside
+            the pin; the version validated against is 0.9.0)
+
+math-verify implements its own timeouts with `signal.alarm`, which raises
+`ValueError` outside the main thread. `parse(..., parsing_timeout=5)` therefore
+turns every symbolic comparison into an exception the moment the grader runs on
+a worker thread or an event loop's pool -- which is where Inspect runs it. So
+its timeouts are disabled at the call site (`parsing_timeout=None`,
+`timeout_seconds=None`) and the budget is imposed by a daemon worker thread
+instead, where it works on any thread. (`grader._run_bounded`,
+`grader._mathverify_equal`)
+
+  VERIFIER_TIMEOUT_SECONDS = 30.0
+
+Generous on purpose. math-verify's own default is 5 seconds and that is the
+budget the reference runs graded under, but a sympy comparison that is merely
+slow must not be recorded as a wrong answer, and 30 seconds is far beyond
+anything the reference records need -- the whole 396-record regrade finishes in
+seconds. A comparison that exceeds it is reported as `verifier_failed`, never as
+incorrect. A thread that overruns cannot be killed in Python, so it is left
+running as a daemon and the process exits without waiting for it; that cost is
+bounded by one abandoned thread per undecidable expression, and
+`verifier_failed` counts them. (`grader.VERIFIER_TIMEOUT_SECONDS`,
+`grader._run_bounded`)
+
+
+6. The optional equivalence judge
+---------------------------------
+
+Off by default and a diagnostic view only: the mechanical grader is the eval's
+definition of correct, and this scorer exists to say how much of a run's failure
+is the model getting the mathematics wrong and how much is it declining to put
+the answer in a box. (`judge.py` module docstring)
+
+The prompt is taken from `jevals/judge.py` in the reference harness and kept
+word for word, including the clause refusing a rounded decimal, which is what
+stops the judge from handing back the credit `gold_in_content` deliberately
+withholds.
+
+  sha256  02574357a53cb1615beb8899b0793fe0ef4165b3e72163b153cb4bac70a5fa37
+
+Only the source formatting differs: the one long paragraph is split across
+adjacent string literals to stay inside the line limit, and `--check grader`
+asserts the assembled string still hashes to that value.
+(`judge.JUDGE_PROMPT`, `judge.JUDGE_PROMPT_SHA256`)
+
+Three deviations from the harness's implementation, each argued where it occurs:
+the reply and the problem are sent in full rather than clipped, the verdict is
+requested as structured output with the free-text fallbacks kept underneath, and
+the judge's own reasoning is requested and stored. Every verdict carries
+`judge_reasoning` in its score metadata -- the summarised reasoning in full, or
+`None` when the provider returned none -- under the house rule that a model
+call's reasoning is captured or its absence is recorded. (`judge.py` module
+docstring)
+
+`DEFAULT_JUDGE_MAX_TOKENS = 4096`, deliberately below Inspect's 8192-token
+auto-streaming threshold: Anthropic's SDK dropped `temperature` from
+`messages.stream()`, so a streamed judge call raises TypeError and every sample
+silently scores an error instead of a verdict.
+(`judge.DEFAULT_JUDGE_MAX_TOKENS`)
+
+
+7. The sampling policy behind every reference number
+----------------------------------------------------
+
+  REFERENCE_SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+
+Recorded from `results/full/hmmt__nosteer/config.json` in the reference
+harness's `capability-evals` runs: Qwen's published thinking-mode settings for
+`Qwen/Qwen3.6-27B`. Every reference number in this package is a measurement of
+this policy, and comparing against them under a different one compares two
+things. (`hmmt.REFERENCE_SAMPLING`)
+
+The task does not impose it. A default temperature is a property of the model
+under test, not of the benchmark, and hard-coding Qwen's settings into a
+provider-agnostic eval would repeat the mistake upstream ctfish makes (see
+`inspect_evals/ctfish/config.py`). It is offered instead, as
+`hmmt_feb_2026(generate_config=reference_generate_config())`.
+
+Why a helper rather than a plain `GenerateConfig`: `top_k` is a real
+`GenerateConfig` field and is never read on Inspect's OpenAI-compatible request
+path, which the `steered` provider and Inspect's own `vllm` provider both
+inherit. Setting it looks right in the eval log and changes nothing about the
+request, so it has to travel in `extra_body`, which is forwarded verbatim and
+which `SteeredAPI.completion_params` merges into rather than replaces, so the
+steering arguments and these coexist. (`hmmt.reference_generate_config`)
+
+Four epochs only mean four attempts if the provider samples. Against a server
+whose default is greedy decoding all four are the same generation: `correct`
+quietly becomes pass@1 at four times the cost, and the item bootstrap narrows
+because the attempts agree rather than because the model is sure. Nothing in the
+metric table would look wrong. (`hmmt.DEFAULT_EPOCHS`)
+
+The output budget is a measurement too:
+
+  DEFAULT_MAX_TOKENS = 81920
+
+At this budget the reference unsteered run still truncated 11 of 132
+generations, with a mean completion of 39,672 tokens; the -2 steering arm
+truncated 22. Lowering it would measure the budget rather than the mathematics,
+and `hmmt_diagnostics` reports `truncated_generations` precisely so that a run
+where it is the budget cannot be read as a capability result. Those counts are
+measurements under `REFERENCE_SAMPLING`, not constants: how long a thinking
+model thinks is a function of its sampling policy. (`hmmt.DEFAULT_MAX_TOKENS`)
+
+Reference numbers, for reading a new run against (README, "Running HMMT Feb
+2026", and `hmmt.REASONING_PROMPT_SUFFIX`):
+
+  0.841   unsteered avg@4, `correct`, `Qwen/Qwen3.6-27B`
+  0.876   the same run's `hmmt_untruncated_scorer` accuracy
+  0.917   the harness's own figure for that second number, which differs because
+          it averages over records rather than over problems; its published
+          interval is a bootstrap over problems, so it is this eval's estimator
+          that interval brackets, not its point estimate
+  0.765   the +2 steering arm
+  0.674   the -2 steering arm
+  84.3    what MathArena publishes for this model on this competition
+
+A healthy unsteered run on this model lands between 0.75 and 0.92. The
+agreement with MathArena is why the default prompt suffix is kept exactly as it
+is, but the comparison stays directional: the sampling policy, the serving stack
+and the prompt are this repository's, and MathArena's own instruction is shorter
+and sits before the problem rather than after it.
+
+
+8. The regrade parity, which is the strongest free evidence here
+----------------------------------------------------------------
+
+`scripts/validate_hmmt.py --check regrade` re-grades the completions of a saved
+reference run with this eval's grader and diffs five things against that run's
+own, all five of which can fail the check: the verdicts, the extracted strings,
+the lenient-hit count, the record-level accuracy and the item bootstrap. The
+gate is `MIN_REGRADE_AGREEMENT_RATIO = 130 / 132` -- a ratio rather than a
+count, because the plan's ">=130/132" is a proportion and only the three known
+arms happen to hold 132 records each: as an absolute threshold it would fail a
+perfect regrade of a 33-record smoke and pass a larger directory on a third of
+the verdicts agreeing. Both directions were reproduced before it was changed to
+a ratio. (`scripts/validate_hmmt.py: MIN_REGRADE_AGREEMENT_RATIO` and
+`check_regrade`; the result below is recorded in commit f280b71, 2026-08-31,
+"Add HMMT Feb 2026 as an inspect_ai eval")
+
+Result across the three reference arms (unsteered, +2, -2):
+
+  396/396   verdicts identical
+  396/396   extracted strings identical
+  0         verifier failures
+
+That is a controlled comparison on the grader rather than an assertion about it:
+the same completions, the same golds, two independent implementations. It is
+also why the two deviations in section 4 can be stated as changing no verdict --
+they were run against these records, not reasoned about.
+
+`--check regrade` needs the records and is therefore not part of `--check all`,
+which runs `dataset`, `grader` and `mockllm`. None of those three needs an API
+key; `dataset` needs Hugging Face. (`scripts/validate_hmmt.py` module docstring)
+
+
+9. The 600-second timeout trap
+------------------------------
+
+This is a fact about serving rather than about the benchmark, and it is recorded
+here because HMMT is the eval where it bites: `DEFAULT_MAX_TOKENS` is 81,920 and
+a reasoning model on a self-hosted server can spend well over ten minutes on one
+problem.
+
+Inspect 0.3.259's OpenAI-compatible providers -- including this repository's
+`steered/` provider, which subclasses `OpenAICompatibleAPI` -- build their HTTP
+client from the OpenAI SDK's defaults when no `client_timeout` is given, and
+those are `Timeout(connect=5.0, read=600, write=600, pool=600)`
+(`_providers/openai_compatible.py`, `_create_http_client` and `_create_client`).
+Past 600 seconds the request raises `APITimeoutError`, the retry starts the same
+generation from scratch, and it times out again: the run neither finishes nor
+fails, it loops and keeps the GPU busy.
+
+`GenerateConfig(timeout=...)` does not fix it. That value bounds the retry loop
+through tenacity's `stop_after_delay` and never reaches the HTTP client. The
+model argument is the only thing that moves the read timeout, as
+`-M client_timeout=7200` or `get_model(..., client_timeout=7200.0)`.
+(`hmmt.py` module docstring)
+
+`scripts/run_hmmt.py` sets it -- `CLIENT_TIMEOUT = 7200.0`, carried in
+`MODEL_ARGS` -- and drops it for `anthropic/*`, whose provider does not take the
+argument and does not carry the 600-second default either.
+(`scripts/run_hmmt.py`, `CLIENT_TIMEOUT`, `MODEL_ARGS` and the filter beneath
+them)
+
+
+10. What this package does not vendor, and why that is checkable
+----------------------------------------------------------------
+
+No problem text, no answer, no dataset file. The set is CC BY-NC-SA 4.0 and a
+runtime pin plus a digest is enough to make a run reproducible
+(`dataset.py` module docstring). The two things that would be tempting to copy
+are pinned by hash instead: the answer key by `ANSWER_KEY_SHA256`, and the
+prompt and judge prompt by `REASONING_SUFFIX_SHA256` and `JUDGE_PROMPT_SHA256`.
+All three are asserted by `scripts/validate_hmmt.py`, so a drift in any of them
+fails a free, offline-or-Hugging-Face-only check rather than surfacing as a
+number nobody can explain.
+
+This file ships in the wheel for the same reason the other evals' do: an
+installed copy should still be able to answer "where did this number come from"
+without the repository. (`pyproject.toml`, `[tool.setuptools.package-data]`)

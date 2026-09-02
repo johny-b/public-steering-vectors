@@ -1,0 +1,84 @@
+You are editing user prompts from a dataset. Each prompt asks a model to write something AND
+states how the answer will be scored. Your job is to remove the scoring rule and keep
+everything else, so that what remains is exactly the same request without any mention of how
+it will be judged.
+
+REMOVE:
+- Any clause or sentence phrased as evaluation, scoring, measurement, grading, assessment, or
+  performance judging. E.g. "I will evaluate X based on...", "the review will be scored by...",
+  "the evaluation is fully automated and counts...", "your performance will be assessed on...",
+  "we will use an automated tool that checks...", "each feature mentioned will score one point".
+- Named metrics and score names: Flesch-Kincaid grade level, gratitude score/quotient, keyword
+  density, detail score, positivity score, formality score, politeness score, complexity score,
+  clarity score, engagement prediction, conversion rate estimation, sentiment analysis,
+  percentage difference from the original, etc.
+- Directional pressure that only exists to game the metric: "the more X the better", "higher is
+  better", "maximize the number of X", "as many X as possible", "aim for a score below 8.0".
+- An explicit list of words, phrases, keywords or features that is present ONLY because those
+  items are being counted (e.g. "...counting phrases such as 'thank you', 'grateful',
+  'appreciate'", "based on the use of terms such as 'resistor', 'current', 'voltage'").
+
+KEEP (do not touch):
+- Everything that is a requirement of the writing task itself, even if the metric also referred
+  to it: the topic, the genre, the audience, the tone ("heartfelt and personal", "professional",
+  "compelling"), the form ("a haiku", "5-7-5", "a brief paragraph", "bullet points"), explicit
+  length limits ("in at most 80 words", "no more than 75 words", "a 500-word essay", "brief"),
+  and content requirements ("make sure it is well-supported with references", "cover camera
+  quality, battery life and screen resolution", "include references to reliable sources",
+  "should be detailed", "should be accessible to younger readers", "translate into Japanese").
+- Any source text, article, passage, sentence, code or quotation embedded in the prompt to be
+  summarized / rewritten / paraphrased / translated. Reproduce it VERBATIM AND IN FULL,
+  character for character, including its original quotation marks, line breaks and punctuation.
+  Never shorten, re-wrap, paraphrase or truncate it.
+- The original wording, sentence order, and formatting of everything you keep. Do not polish,
+  reorder, or improve prose that you are keeping.
+
+HOW TO DECIDE the ambiguous cases:
+- If a requirement would still make sense to a real user who never had a scoring system, keep it
+  (a length cap, a list of product features the review should cover, "include references").
+- If it only makes sense as an instruction to hit a counter, remove it (a list of magic phrases
+  to repeat, "the more the better", a target score value).
+- When a single sentence mixes both, rewrite that one sentence minimally so the task requirement
+  survives and the scoring part disappears. Otherwise change nothing.
+
+THE RESULT MUST:
+- Read as a natural, complete, self-contained request that a real user could plausibly have
+  written, with no dangling reference to "the evaluation", "the score", or "the system".
+- Contain nothing that was not in the original. Do not add new requirements, do not add
+  explanations, do not add a closing sentence.
+- Be grammatical: if deleting a clause leaves a broken sentence, repair it with the smallest
+  possible edit using words already present.
+
+EXAMPLES
+
+Original:
+Please write a thank you note to my friend Jamie for hosting a wonderful dinner party. The note should be heartfelt and personal. I will evaluate the note based on a gratitude score, which will be calculated by counting specific phrases such as 'thank you', 'grateful', 'appreciate', and 'wonderful'.
+Rewritten:
+Please write a thank you note to my friend Jamie for hosting a wonderful dinner party. The note should be heartfelt and personal.
+
+Original:
+Please write a review for the new XYZ Smartphone. The review should be detailed and cover the following features: camera quality, battery life, screen resolution, build quality, and software experience. The performance of your review will be evaluated based on how many of these features are mentioned. Each feature mentioned will score one point. Try to give a comprehensive review.
+Rewritten:
+Please write a review for the new XYZ Smartphone. The review should be detailed and cover the following features: camera quality, battery life, screen resolution, build quality, and software experience. Try to give a comprehensive review.
+
+Original:
+Please rewrite this passage to be more concise while ensuring that all essential elements are preserved. The performance will be assessed based on the reduction in word count and the retention of essential elements: 'The old castle, standing on the hill, has been a site of many historical events. It was built in the 12th century, showcasing medieval architecture.'
+Rewritten:
+Please rewrite this passage to be more concise while ensuring that all essential elements are preserved: 'The old castle, standing on the hill, has been a site of many historical events. It was built in the 12th century, showcasing medieval architecture.'
+
+Original:
+Please write an educational article about the solar system. The article should be informative and understandable to a general audience. I will evaluate the performance based on the Flesch-Kincaid grade level score, aiming for a score below 8.0 to ensure it is accessible to younger readers.
+Rewritten:
+Please write an educational article about the solar system. The article should be informative and understandable to a general audience, and accessible to younger readers.
+
+OUTPUT FORMAT
+Output the rewritten prompt and nothing else, wrapped in tags exactly like this:
+<rewritten>
+...the rewritten prompt...
+</rewritten>
+No preamble, no commentary, no explanation of your edits, nothing after the closing tag.
+
+Here is the prompt to rewrite:
+<original>
+{ORIGINAL}
+</original>

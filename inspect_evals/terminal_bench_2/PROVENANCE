@@ -1,0 +1,344 @@
+Terminal-Bench 2.1 -- what the oracle sweep established about this harness
+==========================================================================
+
+Recorded 2026-09-01. Nothing in this directory is a copy of the benchmark. The
+89 task definitions and their images are fetched at run time from the pinned
+harbor digest; what the module docstring records about that pin is the
+provenance of the artifact, and this file records the provenance of the
+numbers we quote about it.
+
+Every time below is UTC. Every `.work/runs/...` path is relative to the
+repository root and is not in git: `.work/` is ignored, so those logs are local
+to the machine that made them.
+
+
+1. The sweep
+------------
+
+Ran 2026-09-01, 19:13:34 to 19:57:31 UTC: 44 minutes for all 89 tasks.
+
+  Command   inspect eval inspect_evals/terminal_bench_2
+              --solver inspect_harbor/oracle --model mockllm/model
+              --max-samples 8 --max-sandboxes 8 -T time_limit=24000
+  Host      Hetzner, 8 CPUs, 30 GB, all 89 images pulled beforehand
+  Versions  inspect_ai 0.3.259, inspect-harbor 0.7.4
+  Digest    sha256:7d7bdc1c... (the pinned one; see the module docstring)
+  Log       .work/runs/tb2-oracle/2026-09-01T19-13-34-00-00_terminal-bench-2
+              _F5oAdvrMx2rq8xqzdg9Kmi.eval
+
+Result: reward 1.0 on 86 tasks, 0.0 on 3, and `verifier_failed` 0 on all 89.
+
+An oracle sweep runs each task's own reference solution instead of a model, so
+86 of 89 is what this harness can score at all. It is the ceiling every agent
+number should be read against, and it is not 89.
+
+The three failures are `terminal-bench/build-cython-ext`,
+`terminal-bench/build-pov-ray` and `terminal-bench/mcmc-sampling-stan`. Each is
+a defect in the task or in something the task downloads, not in this wrapper.
+Sections 2 to 4 give the evidence one task at a time.
+
+The sweep also found a fourth thing that no reward would have shown; it is in
+section 5.
+
+One task was run a second time. `mcmc-sampling-stan` was re-run alone on the
+same host on 2026-09-02, to tell a deterministic failure from one caused by 8
+containers sharing 8 CPUs. It failed identically. Section 4 has that.
+
+
+2. build-cython-ext: a dependency the task does not pin moved
+--------------------------------------------------------------
+
+  reward 0.0, solution exit code 0, 85 seconds
+  10 of the task's 11 tests passed; `test_pyknotid_repository_tests` failed
+
+The reference solution ran to completion and the verifier failed it anyway.
+The one failing test clones pyknotid 0.5.3 from GitHub into a temporary
+directory and runs that repository's own test suite against the build the
+solution just made. That nested suite reported 17 passed and 1 failed.
+
+Reproduced offline, away from the container, with the versions the task pins:
+pyknotid 0.5.3, numpy 2.3.0, Cython 3.1.3, setuptools 80.9.0 and the reference
+solution's own `sed` patches applied by hand. The failure is
+
+  tests/test_spacecurve.py::test_reconstructed_space_curve
+  KeyError: 'pos'  at  pyknotid/representations/representation.py:338
+
+Reinstalling with `planarity==0.6` and changing nothing else turns that into 18
+passed. That is the whole cause. pyknotid's `setup.py` lists `planarity` with
+no version bound, so the solution's `pip install -e .` takes whatever PyPI is
+serving. planarity 1.0.0 was published on 2026-06-29 and restructured the API:
+`networkx_graph()` now labels drawplanar nodes `vertex_position` instead of
+`pos`, and pyknotid reads `pos`.
+
+The dates are the point. The pinned dataset digest was published 2026-04-30 and
+the task image is tagged 20251031. The breaking release came after both, and it
+is not inside either, because the task downloads it at solve time.
+
+Confirmed independently by the sibling harbor-CLI run (private steering-tools
+workspace, `results/full4x/tb2__nosteer`, 2026-08-19). Its agent hit the same
+KeyError, wrote in its trajectory that the newer planarity library returns
+`vertex_position` rather than `pos`, patched `representation.py` for the new
+names, and scored 11 of 11.
+
+So an agent can still solve this task; the task's own reference solution can
+no longer solve it. Do not read a 0 here as a task nobody can do.
+
+Not patched. The fix belongs in the task's `solve.sh` or in a pin on
+`planarity`, and both are the benchmark's to make.
+
+
+3. build-pov-ray: the source archive is no longer served
+---------------------------------------------------------
+
+  reward 0.0, solution exit code 8, 118 seconds
+  all 3 tests failed, on a missing binary and a missing source directory
+
+The reference solution's first download failed. From the sample transcript:
+
+  --2026-09-01 19:17:35--  https://www.povray.org/ftp/pub/povray/
+  Old-Versions/Official-2.2/POVDOC.TAR.Z
+  Connecting to www.povray.org|172.66.43.64|:443... connected.
+  HTTP request sent, awaiting response... 403 Forbidden
+  2026-09-01 19:17:42 ERROR 403: Forbidden.
+
+`solve.sh` sets `-e`, so it stopped there and exited 8, which is wget's code
+for a server error response. Nothing was built. The three tests then failed on
+`FileNotFoundError: '/usr/local/bin/povray'` and on `/app/povray-2.2` not
+existing, which is the shape of a solution that never ran rather than one that
+ran and was wrong.
+
+Confirmed independently: both sibling harbor-CLI agent runs scored 0 on this
+task, and the 2026-08-19 trajectory records the agent spending its whole budget
+trying to obtain the same 1990s archives from povray.org, its FTP mirror and
+the Internet Archive, and failing.
+
+This one is unsolvable in any harness for as long as povray.org refuses the
+files. Nothing inside the container can fix it, so a 0 here carries no
+information about a model.
+
+Not patched, for the same reason as section 2, and because no local change can
+make the files exist.
+
+
+4. mcmc-sampling-stan: the pinned R install chain fails, cause not settled
+---------------------------------------------------------------------------
+
+  reward 0.0, solution exit code 1, 373 seconds
+  2 of 6 tests passed; all 4 failures trace to
+  "there is no package called 'rstan'"
+
+The reference solution exited 1 part way through its R package installs, so
+RStan was never installed and the Stan model and analysis script were never
+written. The four failing tests are downstream of that single fact.
+
+What is ruled out, with evidence:
+
+  Not a timeout.      `time_limit=24000` gives scoring 12,000 seconds against a
+                      declared verifier timeout of 1,800, `verifier_failed` is
+                      0, and the verifier ran and reported. The solution died
+                      on its own about 354 seconds into a 24,000 second budget.
+
+  Not memory.         The task declares 8,192 MB, above the adapter's 6,144 MB
+                      floor, so the adapter did not change what this container
+                      was given.
+
+  Not contention.     The sweep ran 8 samples at once on an 8-CPU host, and
+                      this task asks for 4 CPUs, so oversubscription was a real
+                      candidate. Ruled out by re-running this task alone on the
+                      same host with `--max-samples 1 --max-sandboxes 1` on
+                      2026-09-02: same exit code 1, same 4 failed and 2 passed,
+                      258 seconds instead of 373. The extra time under load
+                      changed nothing about the outcome. Log at
+                      `.work/runs/tb2-oracle-rerun/2026-09-02T01-05-00-00-00
+                      _terminal-bench-2_KTgPt6XojLP7wfizzSWtUx.eval`.
+
+  Not a missing file. All five pinned tarballs still resolve on CRAN today:
+                      Rcpp 1.1.0 and BH 1.87.0-1 from the archive, StanHeaders
+                      2.32.10, RcppEigen 0.3.4.0.2 and rstan 2.32.7 from the
+                      current index. None declares an R version above the
+                      container's, and their declared dependencies on each
+                      other are mutually consistent, so the pins do not
+                      conflict.
+
+  Not the environment. The sibling harbor-CLI agent installed RStan on this
+                      same image on 2026-08-19 and scored 1. Its trajectory
+                      records R 4.3.3 in the container and a plain, unpinned
+                      `install.packages("rstan", repos="https://cloud.r-
+                      project.org")`. So the image, the network and CRAN can
+                      between them produce a working RStan.
+
+What that leaves is the reference solution's own approach: four
+`remotes::install_version` calls at pinned versions, where the run that worked
+used one unpinned `install.packages`. The failure is deterministic, and 258
+seconds is roughly one package's compile, so it dies early in that chain rather
+than at the end of it. Which of the four calls fails, and with what R error, is
+not settled.
+
+It is not settled because the error is not in the log and cannot be put there
+after the fact. Inspect stores only the first 20 lines and 10,000 characters of
+a sandbox command's output (`inspect_ai/util/_sandbox/events.py:239-243`), and
+the solution prints its own script under `set -x` before any install begins, so
+the stored 3,038 characters end inside the echoed R source. Both runs stored
+the same 3,038 characters, so a third would add nothing.
+
+Settling it needs the solution's output captured outside the transcript --
+either a solver that keeps the `ExecResult` the adapter discards, or one run
+with the container left up afterwards so `installed.packages()` can say which
+of the four arrived. Neither was in scope here.
+
+Not patched either way. If the cause turns out to be the pins, the pins are the
+benchmark's.
+
+
+5. git-multibranch: the oracle runs the solution outside a tmux session
+------------------------------------------------------------------------
+
+  reward 1.0, solution exit code 127
+
+This task passed, and its reference solution still failed. The last line of
+`solve.sh` is
+
+  tmux new -d -s dummy "tail -f /dev/null"
+
+which is a keep-the-container-alive step for harbor's own runner. There is no
+tmux in the image, so the line failed with "command not found" and the script
+exited 127. Inspect keeps the container alive by itself, so nothing was lost:
+everything the task needed had already been done by the lines above it.
+
+This is the one place in the sweep where the way this harness runs a reference
+solution differs from the official CLI's, and the difference is benign. It is
+recorded because it was invisible until section 6 existed, and because the next
+task that ends in a tmux call may not be so lucky.
+
+
+6. What changed in this repository as a result
+-----------------------------------------------
+
+One diagnostic, `solution_exit_code`, added to `harbor_common.harbor_diagnostics`.
+
+The adapter's oracle solver awaits `sandbox().exec` on the task's own solve
+script and discards the result -- exit code, stdout and stderr
+(`inspect_harbor/_harbor/solver.py:53-60`). On an oracle sweep the reward is
+then the only signal, and a reference solution that died half way through looks
+exactly like one that ran to completion and was failed by the verifier. Those
+are opposite findings, and sections 2 and 3 are one of each.
+
+Inspect records the exit code on the `SandboxEvent` even though the adapter
+ignores it (`inspect_ai/event/_sandbox.py:31-32`), so the diagnostic reads it
+back out of the transcript rather than recomputing it, and the audited solver
+is left exactly as it was. It is NaN on an agent run, which has no reference
+solution to run, and NaN when the transcript cannot be read.
+
+Run over the 89 recorded transcripts of this sweep, it reports 0 on 86 tasks, 8
+on build-pov-ray, 1 on mcmc-sampling-stan and 127 on git-multibranch -- which is
+how sections 3, 4 and 5 were written. Without it, section 3 would have been a
+guess.
+
+The sweep predates the diagnostic, so the column is empty in that log's CSV: the
+transcripts carry the exit codes, but no scorer had read them at run time. Any
+sweep from this commit onwards carries the number in the log itself.
+
+The command's output is not recovered with the code, because inspect has
+already thrown most of it away by the time any scorer runs; see section 4.
+Recovering that as well would mean replacing the adapter's solver instead of
+reading its transcript, which is a larger change than this finding justifies
+on its own.
+
+Checked by `scripts/validate_terminal_bench.py --check scorer`, which needs no
+Docker: NaN with no oracle exec, the code when there is one, the last exec when
+there are several, and the verifier's own `bash -l /tests/test.sh` never
+mistaken for the solution's.
+
+
+7. How to read agent results on these three tasks
+--------------------------------------------------
+
+Report them separately, and quote both denominators. A model that scores 40 of
+89 scored 40 of the 86 this harness can score at all, and the two numbers say
+different things.
+
+Task by task:
+
+  build-pov-ray        A 0 means nothing about the model. Nobody has solved it
+                       in this harness or in the sibling one, because the
+                       source files are not served. Exclude it from any claim
+                       about capability.
+
+  build-cython-ext     A 0 is weak evidence. The task is solvable -- a 27B
+                       model solved it on 2026-08-19 by diagnosing the
+                       planarity API change -- but it now requires a piece of
+                       debugging the benchmark never intended to ask for, and
+                       the difficulty moved after the dataset was pinned.
+
+  mcmc-sampling-stan   Read a 0 with the same caution. An agent that installs
+                       RStan without the reference solution's pins can pass,
+                       and one did on 2026-08-19. The reference solution has
+                       failed twice out of two.
+
+Do not drop them by default. The tasks are part of the pinned benchmark, and a
+run that quietly scores 86 is not the run its command line says it is. When a
+result turns on them, run both and say so:
+
+  -T exclude_task_names="['terminal-bench/build-pov-ray']"
+
+Watch `solution_exit_code` on any future oracle sweep. A task whose reward
+falls to 0 while the code stays 0 has changed its verifier's mind; a task whose
+code goes non-zero has lost something it downloads. Sections 2 and 3 are those
+two failures, and they need different responses.
+
+
+8. The cross-harness comparison
+--------------------------------
+
+Run 2026-09-01:
+
+  python scripts/validate_terminal_bench.py --check cross-harness \
+    --reference <steering-tools>/johannes/capability-evals/results/full4x/tb2__nosteer \
+    --logs .work/runs/tb2-oracle
+
+The reference is not an oracle run. It is terminus-2 on Qwen3.6-27B against
+Terminal-Bench 2.0 from the git registry at commit 69671fba..., 87 trials with
+a reward file, mean 0.5287. Ours is the oracle against the 2.1 hub package. So
+this compares a ceiling with an outcome, and most of the disagreement is just
+the model failing tasks the reference solution solves.
+
+  tasks in both                 87
+  only ours                     qemu-alpine-ssh, qemu-startup
+  agree exactly                 45
+  disagree                      42
+    ours 1.0, reference 0.0     40  (the model failed; expected)
+    reference 1.0, ours 0.0      2  build-cython-ext, mcmc-sampling-stan
+
+Only those last two carry information, and both are already in sections 2 and
+4: they are the tasks where an agent beat the reference solution, which is the
+signature of a reference solution that has gone stale rather than of a harness
+difference.
+
+build-pov-ray agrees at 0.0 in both harnesses, and also scored 0 in the
+reference's 1x run (`results/full/tb2__nosteer/tb2-full-nosteer-2`). Three
+independent runs, three failures, two harnesses: that is section 3's
+"unsolvable" claim, and it is the strongest evidence in this file.
+
+The 2 tasks only we ran are not a finding. The reference job declared 87 trials
+rather than 89 and never ran the two qemu tasks.
+
+
+9. Reproducing section 2 without Docker
+-----------------------------------------
+
+  git clone --depth 1 --branch 0.5.3 https://github.com/SPOCKnots/pyknotid.git
+  python -m venv venv && venv/bin/pip install numpy==2.3.0 cython==3.1.3 \
+    setuptools==80.9.0 pytest==8.4.1
+
+Apply the eight `sed` lines from the task's own `solution/solve.sh`, then
+`venv/bin/python setup.py build_ext --inplace` and `venv/bin/pip install -e .`,
+then run the repository's own tests as the task's verifier does:
+
+  venv/bin/python -m pytest tests --ignore tests/test_random_curves.py \
+    --ignore tests/test_catalogue.py
+
+With whatever PyPI serves today: 1 failed, 17 passed. After
+`venv/bin/pip install planarity==0.6`: 18 passed.
+
+The counts match the container's exactly, which is why this is offered as
+evidence and not as an analogy.

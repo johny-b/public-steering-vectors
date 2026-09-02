@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-steering"
+version = "0.1.0"
+description = "Per-request activation steering for a vLLM server"
+requires-python = ">=3.12"
+dependencies = [
+    # Pinned: the patch wraps vllm.v1.worker.gpu_model_runner, a private module
+    # with no stability guarantee across releases.
+    "vllm==0.27.1",
+    "numpy>=1.26",
+    "torch>=2.5",
+    # `steering_vectors`, which owns the vector directory format this server
+    # reads, is deliberately NOT listed. The name `steering-vectors` on PyPI
+    # belongs to an unrelated project, so a requirement here would install the
+    # wrong code silently. Install this repository's copy instead:
+    #     pip install --no-deps -e .
+    # See the ImportError in src/vllm_steering/store.py, which says the same
+    # thing at the moment it becomes relevant.
+]
+
+# The manifest endpoint. vLLM discovers this through installed package
+# metadata, so it reaches the API server process without PYTHONPATH — unlike
+# the worker-side patch, which travels by sitecustomize.py. Endpoint plugins
+# are opt-in: vLLM loads this only when VLLM_PLUGINS names it, which
+# scripts/serve.sh does.
+[project.entry-points."vllm.endpoint_plugins"]
+steering = "vllm_steering.endpoint:SteeringEndpointPlugin"
+
+# Only the package is installed. sitecustomize.py is deliberately left out of
+# the distribution: on PYTHONPATH it is auto-imported by every interpreter, so
+# installing it into site-packages would reach unrelated processes.
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vllm_steering*"]

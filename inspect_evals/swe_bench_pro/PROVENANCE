@@ -1,0 +1,190 @@
+SWE-bench Pro -- why this wrapper overrides the adapter's verifier shell
+========================================================================
+
+Recorded 2026-09-02. Nothing in this directory is a copy of the benchmark. The
+731 task definitions and their images are fetched at run time from the pinned
+harbor digests; what the module docstring records about those pins is the
+provenance of the artifact, and this file records the provenance of the one
+place where this wrapper changes what `inspect_harbor` does.
+
+Every time below is UTC. Every `.work/runs/...` path is relative to the
+repository root and is not in git: `.work/` is ignored, so those logs are local
+to the machine that made them.
+
+
+1. What was run
+---------------
+
+The plan's 20-task cross-language oracle subset, on the adapter's own
+invocation, before any of this was known.
+
+  Command   inspect eval inspect_evals/swe_bench_pro/swe_bench_pro.py@swe_bench_pro
+              --solver inspect_harbor/oracle --model mockllm/model
+              --max-samples 3 --max-sandboxes 3 -T time_limit=6600
+              -T task_names=[the 20 from --check oracle-plan]
+  Host      Hetzner, 8 CPUs, 30 GB, images pulled by the run itself
+  Versions  inspect_ai 0.3.259, inspect-harbor 0.7.4
+  Digest    sha256:88411d32... (the pinned scale-ai one)
+  Log       .work/runs/swe_bench_pro/oracle20-before-fix/
+  Wall      1,443 s, 04:51 to 05:16
+
+Result: reward 0.700, resolved 0.700, verifier_failed 0.000, unscored 0.000,
+reward_fractional 0.000, scorer_ran 1.000. Fourteen tasks at 1.0, six at 0.0.
+
+The oracle applies each task's own gold patch, so on a faithful harness the
+expectation is 1.0 on almost all of them. `--check oracle-plan` says so up
+front, and says why a subset where everything is expected to pass would be
+useless: one of the 20 (a NodeBB instance) is recorded at 0.0 in the
+packagers' own patched-oracle run, so reproducing that 0.0 is evidence the
+seam is faithful. A NEW 0.0 is what has to be explained.
+
+
+2. The six failures were not spread out
+---------------------------------------
+
+  task                                       language  packagers' oracle
+  instance_flipt-io__flipt-02e21636...       Go        1.0
+  instance_flipt-io__flipt-05d7234f...       Go        -
+  instance_future-architect__vuls-01441351.. Go        -
+  instance_gravitational__teleport-005dcb16. Go        -
+  instance_navidrome__navidrome-0130c6dc...  Go        1.0
+  instance_nodebb__nodebb-00c70ce7...        JS        0.0
+
+Every Go task in the subset, five of five, plus the one instance the packagers
+themselves score 0.0. All fourteen Python, TypeScript and non-NodeBB
+JavaScript tasks scored 1.0. Two of the five Go tasks have a recorded upstream
+oracle reward of 1.0, so this was a disagreement with the packagers rather
+than a known-broken-task list.
+
+All six carried the same shape, and it is not "the gold patch did not fix the
+bug":
+
+  Required tests: 1
+  Passed tests: 0
+  RESULT: FAILED
+  Missing tests: ['TestScanner']
+
+`Missing` means the parser found no result for that test at all. The tests did
+not run.
+
+
+3. How it was narrowed, including two wrong answers
+---------------------------------------------------
+
+Worked on `instance_navidrome__navidrome-0130c6dc...`, whose packagers' oracle
+reward is 1.0 and which this seam scored 0.0.
+
+  a. The container state at verify time is correct. Re-ran the single task with
+     --no-sandbox-cleanup and inspected the surviving container: the gold patch
+     is applied (five modified source files plus the added migration),
+     solution_patch.diff is on disk, the gold test file is checked out, and
+     solution_exit_code is 0.
+
+  b. /logs/verifier/ is empty in that container, which independently confirms
+     the adapter's verifier-log deletion on this dataset: output.json and
+     run-script-stdout.txt, which test.sh copies there for debugging, are gone
+     before anything downstream can read them.
+
+  c. The task passes outside the harness. Same image, same --cpus 1 --memory 6g,
+     solve.sh then the gold checkout then the shipped tests/test.sh:
+     REWARD=1, RESULT: PASSED, and output.json
+     {"name": "TestScanner", "status": "PASSED"}. So the task, the gold patch
+     and the official parser.py are all fine.
+
+  d. WRONG ANSWER 1: a cold Go build cache. The images ship a partly warm
+     GOCACHE (242 MB) and a fresh 1-CPU/6 GB container completes the build and
+     passes in 61 s. Also inconsistent with the timing: the single-task rerun
+     took 4 s end to end, which is less than any go test here takes.
+
+  e. WRONG ANSWER 2: HOME unset, so Go cannot locate a build cache. `env -u HOME`
+     does produce a plausible-looking failure ("build cache is required, but
+     could not be located"), but `docker exec` sets HOME=/root, so that is not
+     what happens.
+
+  f. The answer: the adapter runs the verifier as a LOGIN shell.
+
+       result = await sandbox().exec(
+           ["bash", "-l", container_test_path], ...
+       )                                 # inspect_harbor/_harbor/scorer.py:100
+
+     `bash -l` sources /etc/profile, which on these images overwrites the PATH
+     the image sets through ENV. Measured inside the built task image:
+
+       non-login  PATH=/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:
+                       /usr/sbin:/usr/bin:/sbin:/bin        -> /usr/local/go/bin/go
+       login      PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:
+                       /usr/sbin:/usr/bin:/sbin:/bin        -> go: not found
+
+     Running the shipped verifier under `bash -l` reproduces the harness result
+     exactly -- exit=1, REWARD=0, Passed tests: 0, Missing tests: ['TestScanner']
+     -- and the same verifier in the same container under a non-login shell
+     gives REWARD=1.
+
+
+4. Why this is worse than a visible failure
+-------------------------------------------
+
+The shipped tests/test.sh traps its own exit and writes 0 on every non-zero
+path, so this arrives as a clean, confident zero: verifier_failed 0, unscored 0,
+scorer_ran 1, a reward file that exists and parses. Nothing in the score record
+says the toolchain was missing.
+
+Scope is all four Go repositories -- flipt, teleport, vuls, navidrome -- which
+is 280 of the 731 tasks, 38% of the benchmark. Python, TypeScript and
+non-NodeBB JavaScript are unaffected: their interpreters are in /usr/bin and
+/usr/local/bin, which /etc/profile does not take away.
+
+It would have hit all steering arms equally, so it does not manufacture a
+dose-response curve. It makes 38% of the measurement uninformative while
+looking like one, and it makes the absolute numbers wrong.
+
+
+5. Terminal-Bench 2.1 is not affected, and that was measured
+------------------------------------------------------------
+
+The same adapter scorer runs Terminal-Bench's verifiers, so the question had to
+be answered rather than assumed. Read back sample by sample from the 89-task
+oracle sweep of 2026-09-01
+(.work/runs/tb2-oracle/2026-09-01T19-13-34-00-00_terminal-bench-2_F5oAdvrMx2rq8xqzdg9Kmi.eval):
+
+  * 86 of 89 tasks scored reward 1.0 under the adapter's own login shell;
+  * ZERO of the 89 preserved verifier outputs contain `command not found`,
+    `executable file not found`, or a missing-interpreter signature;
+  * the three that are not 1.0 are the documented task-side defects
+    (build-cython-ext, build-pov-ray, mcmc-sampling-stan), and their verifier
+    outputs are 5,629, 23,600 and 8,126 characters of real build and test
+    output. Their verifiers ran. The SWE-bench Pro Go failures are the opposite
+    shape: 264 characters saying nothing ran.
+
+Terminal-Bench's images put their tooling on the stock PATH, so /etc/profile
+takes nothing away. terminal_bench_2 therefore keeps the adapter's own
+invocation and its 86/89 sweep stays the number this repository quotes.
+
+
+6. What was changed, and what was deliberately not
+--------------------------------------------------
+
+Changed: swe_bench_pro passes verifier_login_shell=False to harbor_reward,
+which installs harbor_common.verifier_shell's override. The override removes
+the `-l` from exactly one argv shape, ["bash", "-l", <path>], and passes every
+other sandbox call through untouched -- including the adapter's own two
+`mkdir -p` calls and its cleanup `unset`s in the same function.
+
+Not changed: inspect-harbor. It stays pinned at 0.7.4 and unedited. This
+repository's harbor wrappers make line-anchored claims about its source;
+editing the installed package would make the pin a lie, and bumping it would
+invalidate the audit that findings 1-5 of harbor_common/scorer.py rest on.
+
+The override refuses to install silently if the finding stops being live: if a
+future adapter no longer contains ["bash", "-l", container_test_path],
+install_image_path_verifier_shell raises rather than becoming a no-op, because
+a no-op override is the dangerous outcome -- the Go tasks would go back to
+scoring a confident zero while the seam still claimed to have fixed it.
+
+scripts/validate_swe_bench_pro.py --check verifier-shell asserts all of that:
+that the finding is still live on the installed version, that the rewrite hits
+one argv shape and leaves eight lookalikes alone, that the patch lands on the
+symbol the adapter actually calls, and -- when a Docker daemon and a built Go
+task image are present -- that go really is on PATH under this invocation and
+really is not under the adapter's. The container half reports itself as skipped
+rather than passing quietly when there is nothing to measure.

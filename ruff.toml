@@ -1,0 +1,30 @@
+line-length = 88
+target-version = "py310"
+
+# inspect_evals/agentic_misalignment/ is vendored from UKGovernmentBEIS/inspect_evals
+# and is deliberately byte-identical to it apart from its import lines, so it is
+# linted here only for the things that would catch a bad port. Two carve-outs:
+#
+#   templates/ is data, not code. The .md files under it are the eval's prompts,
+#   and `ruff format` rewrites Python inside fenced code blocks — pointing it at
+#   that tree risks silently editing a prompt. system_prompt_templates.py is the
+#   same prompts as string literals. README.md is upstream's, likewise verbatim.
+#
+#   E501 and UP015 fire only on upstream's own lines. Upstream lints under a
+#   config that ignores E501 and enables none of the UP rules selected below, so
+#   fixing them here would mean editing vendored code to satisfy a rule its
+#   authors never applied. Upstream carves its own vendored trees out the same
+#   way (`extend-exclude` for cybench/challenges and friends).
+#
+# F, I and W still apply to the ported modules, which is what would catch an
+# import rewrite that went wrong.
+extend-exclude = [
+    "inspect_evals/agentic_misalignment/README.md",
+    "inspect_evals/agentic_misalignment/templates",
+]
+
+[lint]
+select = ["E", "F", "I", "UP", "W"]
+
+[lint.per-file-ignores]
+"inspect_evals/agentic_misalignment/**/*.py" = ["E501", "UP015"]

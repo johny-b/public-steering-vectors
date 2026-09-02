@@ -1,0 +1,247 @@
+TRAIT — provenance of everything in this package that came from somewhere else
+==============================================================================
+
+Recorded 2026-08-31; revised 2026-09-02, when the one-token administration was
+withdrawn (section 1a). Nothing in this directory is a copy of the dataset; the
+items are fetched at run time and verified. Nothing in it is a copy of upstream
+code either, as of the revision: the paper's three prompt templates and its
+scoring arithmetic left with the administration that used them.
+
+
+1. The benchmark
+----------------
+
+Paper      Do LLMs Have Distinct and Consistent Personality? TRAIT:
+           Personality Testset designed for LLMs with Psychometrics.
+           Seungbeen Lee et al., arXiv:2406.14703. Title and first author
+           read from arXiv's own citation metadata for that identifier on
+           2026-08-31, not from memory.
+Code       https://github.com/pull-ups/TRAIT
+Commit     b623cb57dc2a263a7d0f2b6504385a25e2224c77 (repository HEAD as read
+           on 2026-08-31)
+Licence    The repository carries no LICENSE file. Nothing from it is
+           reproduced in this package any more. The licence question that
+           was flagged for legal review — whether short functional excerpts
+           of the prompt templates and the scoring arithmetic may be
+           reproduced with attribution — is therefore not live here while
+           the one-token administration is out, and returns with it.
+
+Files read, and what was taken from each:
+
+  trait/src/run.py              The item text is `situation + " " + query`,
+                                which the Hugging Face mirror already ships
+                                joined as `question`. That is the only thing
+                                this package still takes from upstream code.
+
+  trait/src/util/prompts.py     The three prompt templates. Read and ported,
+  trait/src/util/option_dict_4.py     then removed with the one-token
+  trait/src/analysis.py         administration; see 1a.
+
+The one administration that ships, `trait_bench.trait_generative`, is not a
+port. The paper has no generative variant: the item text and its four
+responses are TRAIT's, and the scaffolding around them — a per-item shuffled
+option order, a format instruction, an answer read back out of the reply — is
+this repository's, and follows the sibling study's conventions recorded in
+section 4.
+
+Deviations from the paper that still apply:
+
+  a. The chat path is always used. The paper administers base models with raw
+     text and no chat template. Absolute levels are therefore not comparable
+     to the paper's table; differences between conditions measured through
+     this eval are. (`trait_bench` module docstring)
+
+  b. The administration is generative rather than a next-token read, so there
+     is no published number to set a result beside at all. See 1a.
+
+
+1a. The withdrawn one-token administration
+------------------------------------------
+
+Until 2026-09-02 this package also shipped `trait_logprob`, a port of the
+paper's own protocol: the prompt stopped mid-sentence at `Answer: `, one token
+was generated, and the distribution over the four option labels was the
+measurement. It carried the paper's three prompt templates byte for byte, its
+mirrored option orders, and its debiased `np.argmax` arithmetic.
+
+It was withdrawn because it does not measure what it claims to on a model
+served as a chat model. The paper's templates end mid-sentence, which is the
+right shape for reading a next-token distribution from a base model and the
+wrong shape for a chat turn: the model answers the prompt with prose rather
+than with an answer label, so almost none of the next-token mass sits on A-D
+and the published arithmetic then normalises a rounding error into a
+confident-looking score. The eval had a diagnostic for exactly this,
+`option_mass`, and the diagnostic is what condemned it.
+
+That is a defect in the port's prompting, not in the paper's protocol. The way
+back is a prefilled chat template — the assistant turn opened for the model and
+the answer cue placed inside it, so the token being read is genuinely the
+model's answer position — and that administration is planned. It is deliberately
+not a patch of the old one: which bytes go in the prefill is the whole
+experiment, and the old templates were written for a different serving mode.
+
+The removed code is not lost. It is in this repository's history, in the commit
+that this file's revision note names, and on branch `eval/trait` (pull request
+#12), which is where the redo starts from. Nothing else in the package changed
+behaviour when it was removed: the generative dataset, the shuffle, the
+extractor and the scorers are the same code producing the same numbers.
+
+Two deviations from upstream were recorded here while that administration
+shipped, and are kept because the redo has to make the same two decisions
+again. First, upstream divides by the sum of the four option probabilities
+unconditionally, and when that sum is zero it produces `nan`, `argmax` returns
+index 0, and an item the model never engaged with is counted as evidence of a
+high trait; this port refused to score it instead. Second, upstream matches the
+bare option token only, which reads every option as probability zero on
+tokenizers that encode a word-initial token with its leading space, so this
+port summed the bare and space-prefixed spellings. A third was recorded about
+upstream rather than about the port: its GPT branch exponentiates an already
+exponentiated logprob (`run.py` line 132 against `analysis.py` lines 67-75),
+which flattens the normalised distribution towards uniform, so the paper's
+ChatGPT and GPT-4 columns were produced by a different computation and are not
+a comparison target for anybody.
+
+
+2. The dataset
+--------------
+
+Repository https://huggingface.co/datasets/mirlab/TRAIT (gated)
+Revision   8b31c078cb897c3917d2ee48735d0c15030680e0
+File       data/test-00000-of-00001.parquet
+sha256     589a91d0df9a3a55416f871875b0a9ea8c457001050c05182d07cf790e406b36
+Size       8,000 rows; 1,000 for each of Agreeableness, Conscientiousness,
+           Extraversion, Neuroticism, Openness, Machiavellianism, Narcissism,
+           Psychopathy
+Licence    The gated dataset card states that the annotations are licensed
+           CC-BY-4.0. The card is behind the gate, so that statement is
+           recorded here rather than linked to.
+
+The file is downloaded at run time with `hf_hub_download`, pinned to the
+revision above, and its sha256 is checked before it is read. It is never
+vendored: the gate is the authors' condition for access and shipping a copy
+would route around it.
+
+The parquet is used rather than the repository's declared per-trait splits
+because the splits drop the `idx` column, and without a stable item id a
+seeded subsample is neither reproducible nor joinable to records from another
+harness.
+
+The digest above was verified twice: once against an independently fetched
+copy held by the sibling personality-steering study, and once against this
+package's own download.
+
+
+3. Known dataset defect: non-self-contained stems
+-------------------------------------------------
+
+Some TRAIT question stems do not stand on their own. The stem points at
+something it never introduced — a bare demonstrative with no antecedent ("How
+should I react to this situation?", "How should I address this lie ...") — or
+the only content in the question is a personal name the reader has not met
+("How can I encourage Sharad effectively?"). Every stem is two sentences: a
+general remark about the trait, then the question. The remark never describes a
+scene, so there is nothing for the demonstrative to refer back to.
+
+How this was found, 2026-08-31. A human reading a run's prompts noticed one
+that made no sense. Sixteen stems were then drawn at random and read closely by
+a strong model, one at a time, with the question put as: does this stem stand on
+its own? Three of the sixteen came back clearly not self-contained, and roughly
+three more were borderline.
+
+Rate, stated with its uncertainty rather than rounded into a fact. Three of
+sixteen is 19%, exact 95% interval 4% to 46%. Six of sixteen — clear plus
+borderline — is 38%, interval 15% to 65%. Those intervals are wide enough that
+the honest summary is "somewhere between a few per cent and half the items,
+most likely around a fifth". n=16 is a spot check, not a measurement; it was
+enough to establish that the defect is real and common, and it is not enough to
+support any number quoted to the nearest per cent.
+
+Known examples, by idx:
+
+  5069  Machiavellianism  "... How should I address this lie to both rectify
+                          the situation and ensure it does not negatively
+                          impact my career?" — no lie is described, and the
+                          colleague named in the options appears nowhere in the
+                          stem.
+  5886  Machiavellianism  "... How should I react to this situation?" — no
+                          situation.
+  3286  Agreeableness     "... How should I handle this situation with my
+                          guests?" — no situation and no guests.
+  48    Openness          "... How can I encourage Sharad effectively?" —
+                          Sharad is introduced by the options, not the stem.
+
+Why this is noise and not breakage. In every case observed, the four response
+options recover the missing context: idx 5069's options name Khadin and the
+disputed contribution, idx 3286's options establish that a cooked meal has gone
+wrong in front of guests. A test-taker always sees the stem and the four options
+together, which is why models answer these items without visible confusion and
+why no diagnostic in this eval fires on them. What the defect costs is construct
+validity, not usability: the item measures a preference among four responses to
+a scene the respondent had to reconstruct from the responses themselves, which
+is a slightly different task from the one the benchmark claims to administer,
+and it adds variance to a trait score without biasing it in a knowable
+direction. Nothing here is a reason to distrust a run. It is a reason to report
+the instrument honestly and, if a result turns on a few points, to check that it
+survives dropping the affected items.
+
+Structural validation cannot catch it. `dataset.load_trait_items` rejects an
+empty question, a duplicate idx, a repeated option — every one of these rows
+passes all of that. The defect is semantic.
+
+One empirical cross-check supports reading the defect as noise rather than
+signal (internal steering dose-response results, 2026-08-31, 100 items/trait
+generative administration): the per-trait flag rate does not predict which
+scales respond to steering. The strongest steering effect sat on the
+least-flagged scale (Agreeableness, 15% flagged) and a strong trend on the
+most-flagged (Machiavellianism, 31%), while two other low-flag scales were
+flat. One study, one vector — consistent with models recovering the missing
+context from the options, not proof of it.
+
+What to do about it, and what has not been done. Deciding whether a given stem
+is self-contained is a judgement about language, so under this repository's
+rule — an LLM judge for judgement calls, exact code only for exact things — the
+exclusion list should come from an LLM-judge screen over all 8,000 stems,
+reading each stem with its options and recording its reasoning. That screen has
+not been run. Until it has, there is no exclusion list, and the tasks default to
+the full benchmark.
+
+What does exist is a flagging heuristic, `scripts/validate_trait.py --check
+self-containment`. It flags 1,833 of 8,000 stems (22.9%): 1,822 for a bare
+demonstrative, 11 for a bare personal name. It is a candidate generator for the
+screen and nothing else — it over-flags deictic uses ("this weekend"),
+under-flags the same defect worn with a definite article ("the situation with
+Remedi", idx 5111), and cannot tell a thin stem from a broken one. Its 22.9%
+should not be read as a better estimate of the defect rate than the close-read's
+19%; it is a different quantity, measured by a cruder instrument. The check's
+own fixture is the four idx values above: it asserts that it still flags at
+least three of them, and fails if it does not.
+
+When a screen does produce a list, `trait_generative(exclude_idx=[...])`
+administers the benchmark without those items. The exclusion is applied after
+the seeded draw, so an excluded run is the baseline run minus the named items
+rather than a different draw; the per-trait counts reach the task metadata.
+Report both runs.
+
+
+4. Conventions borrowed from the sibling study
+----------------------------------------------
+
+The generative variant's format line, its exact-answer regex, and the
+per-item seeded option shuffle follow
+`v2-steering-tools/johannes/personality-steering` (`psybat/prompts.py`,
+`psybat/parsing.py`, `scripts/build_frozen.py`). They are kept identical in
+wording and behaviour so that runs from the two harnesses can be compared
+item by item. Behaviour, not only wording: the regex is the same pattern, and
+the rule around it is the same rule — take the *last* `Answer:` match and
+reject it if it is not one of the four valid letters, rather than scanning
+backwards for the last valid one. The distinction is not academic: on a reply
+ending "Answer: (Z)" the backward scan would revive an earlier letter the
+model had moved on from, where both harnesses instead record no exact answer
+and leave the reading to the model channel. Checked, not assumed --
+`scripts/validate_trait.py --check prompts` pins the divergent case, and the
+two parsers were run side by side on a table of adversarial replies with no
+disagreement.
+
+The seeded draw here is *not* identical to that study's frozen files — this
+package seeds per trait so that adding a trait never reshuffles the others —
+so a cross-harness comparison must join on `idx`, not on position.

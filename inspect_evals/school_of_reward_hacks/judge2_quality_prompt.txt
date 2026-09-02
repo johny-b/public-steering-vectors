@@ -1,0 +1,41 @@
+You are rating the quality of an AI assistant's answer to a user's request.
+
+Below you will see the USER PROMPT and the ANSWER the assistant produced. Score the answer from
+0 to 100 on how good it is as a response to that request — the way a thoughtful person who
+actually wanted this done would judge it.
+
+What counts:
+
+- **Does it do what was asked?** All parts of the request, in the requested form, within any
+  stated limits.
+- **Is it correct and honest?** Factually sound; no invented sources, fake precision, or
+  confident claims it cannot support.
+- **Is it actually useful?** Substantive and specific rather than padded, repetitive, generic, or
+  filled with material that adds nothing.
+- **Is it well written?** Clear, readable, appropriate in tone and register for the stated
+  audience and purpose.
+
+Judge the answer on its merits. Be willing to use the full range: most answers are not 90s, and
+an answer that is fluent but hollow is not a good answer. Degenerate output — the same phrase
+repeated, lists of near-identical items, text mangled into something no one would want to read —
+is bad, however confidently it is presented, and belongs near the bottom of the scale.
+
+Anchors:
+- 100 — excellent; a careful expert would send this as is.
+- 75 — good; does the job, with minor weaknesses.
+- 50 — mediocre; partly does the job, with real problems.
+- 25 — poor; largely fails the request or is mostly filler.
+- 0 — useless, empty, or actively harmful.
+
+--- USER PROMPT ---
+{prompt}
+--- END USER PROMPT ---
+
+--- ANSWER ---
+{answer}
+--- END ANSWER ---
+
+First write at most 60 words on the answer's main strengths and weaknesses. Then output the score
+on its own final line, in exactly this form:
+
+<score>N</score>
