@@ -1,5 +1,17 @@
 # steering-vectors
 
+## IMPORTANT READ THIS FIRST
+
+This section is the only human-written content in the repo. All the other stuff is vibe-coded (vibe-researched?) and we didn't read it. Many things might be obsolete or reference old versions of the code. Sorry. Your agent should be able to handle that well though.
+
+TL;DR what the repo does:
+* Create a steering vector or use the one we have ([/vectors/0007](/vectors/0007))
+* Deploy vllm-based inference that knows & can apply your vectors, e.g. on RunPod ([/pod](/pod))
+* Use an `inspect_ai` provider that talks to that pod: [/inspect_providers/steered_provider](/inspect_providers/steered_provider)
+* Run some evals from [/inspect_evals](/inspect_evals) (or some other `inspect_ai` evals, they should be easy to port) with different steering vectors and strengths
+
+With that, your LLM agent should be able to reproduce the results from [TODO LW post].
+
 ## Repo content
 
 | Path | What it is |
