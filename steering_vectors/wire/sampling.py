@@ -54,6 +54,7 @@ EXTRA = "extra_body"
 SAMPLING = "sampling"  # changes the token distribution or the stopping rule
 RESPONSE = "response"  # changes what the response contains, not what was sampled
 TEMPLATE = "template"  # changes prompt construction (the chat template)
+CACHE = "cache"  # changes what the engine may reuse between requests
 
 #: What every ``proof`` below refers to: one row per parameter of a
 #: *chat effect matrix* — a measurement against a running server showing that
@@ -240,6 +241,26 @@ SUPPORTED: dict[str, Param] = {
         "a formatting choice. build_request() sets it; pass thinking= instead of "
         "writing it out.",
     ),
+    # -- prefix-cache namespacing, extra_body -------------------------------
+    "cache_salt": _p(
+        "cache_salt",
+        EXTRA,
+        CACHE,
+        "vLLM 0.27.1 source rather than a row of the effect matrix: the field is "
+        "declared at entrypoints/openai/chat_completion/protocol.py:453, and "
+        "v1/core/kv_cache_utils.py:579-580 folds it into the first block's hash, "
+        "which hash_block_tokens() then chains through the whole prefix.",
+        "Namespaces the prefix cache. A cached block is keyed on its token ids "
+        "and this field and nothing else -- vllm_xargs is not in the key -- so "
+        "without it two requests that differ only in steering strength are "
+        "eligible to share one set of KV blocks, and the second one is served a "
+        "prompt the first one steered. steering_salt() builds the value and "
+        "with_steering() sets it, so a caller rarely passes it by hand. It is "
+        "the one entry here whose effect is not visible in the reply: the proof "
+        "above is a source read, and on a server with prefix caching off (the "
+        "default for a hybrid model -- vllm/engine/arg_utils.py:2601-2606) it "
+        "does nothing at all.",
+    ),
 }
 
 
@@ -342,6 +363,23 @@ def split_params(params: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, A
 # ---------------------------------------------------------------------------
 # Building requests
 # ---------------------------------------------------------------------------
+def steering_salt(vector_id: str, strength: float) -> str:
+    """The prefix-cache namespace for one steering condition.
+
+    The engine hashes a cached block over its token ids and ``cache_salt``, and
+    not over ``vllm_xargs``. A sweep asks one prompt at nine strengths and holds
+    the prompt byte-identical across them on purpose, so all nine are eligible
+    to share one set of KV blocks: the first strength to run computes the
+    prompt, the other eight inherit its activations from block 36 up, and only
+    their generated tokens carry the strength they asked for. Deriving the salt
+    from the condition puts each one in its own namespace.
+
+    Both halves of the condition are in it, because two vectors at one strength
+    are two different interventions.
+    """
+    return f"steer:{vector_id}:{float(strength)}"
+
+
 def build_request(
     model: str,
     messages: str | Iterable[Mapping[str, Any]],
