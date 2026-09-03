@@ -118,6 +118,7 @@ MODEL_ENV = "STEER_MODEL"
 #: together — the server answers 400 to one without the other — and a request
 #: carrying neither is unsteered.
 XARGS_FIELD = "vllm_xargs"
+CACHE_SALT_FIELD = "cache_salt"
 VECTOR_ARG = "steer_vector"
 STRENGTH_ARG = "steer_strength"
 
@@ -499,12 +500,17 @@ def with_steering(
     entries by a measured effect on the token distribution. Steering is not one
     of those: it changes the model, not the sampler, and it is proven by the
     pod's own patch rather than by a row of that matrix.
+
+    ``cache_salt`` travels with them because it is derived from them: it is what
+    stops a prompt asked at one strength from being served to the next one out
+    of the prefix cache. See :func:`wire.sampling.steering_salt`.
     """
     extra = dict(request.get("extra_body") or {})
     xargs = dict(extra.get(XARGS_FIELD) or {})
     xargs[VECTOR_ARG] = str(vector_id)
     xargs[STRENGTH_ARG] = float(strength)
     extra[XARGS_FIELD] = xargs
+    extra[CACHE_SALT_FIELD] = sampling.steering_salt(vector_id, strength)
     return {**request, "extra_body": extra}
 
 

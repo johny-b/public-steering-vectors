@@ -35,10 +35,12 @@ from inspect_ai.model._providers.openai_compatible import OpenAICompatibleAPI
 from typing_extensions import override
 
 from steering_vectors import vectorfmt
+from steering_vectors.wire.sampling import steering_salt
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1"
 
 XARGS_FIELD = "vllm_xargs"
+CACHE_SALT_FIELD = "cache_salt"
 VECTOR_ARG = "steer_vector"
 STRENGTH_ARG = "steer_strength"
 TEMPLATE_KWARGS_FIELD = "chat_template_kwargs"
@@ -132,6 +134,14 @@ class SteeredAPI(OpenAICompatibleAPI):
             xargs[VECTOR_ARG] = self.steer_vector
             xargs[STRENGTH_ARG] = self.steer_strength
             extra_body[XARGS_FIELD] = xargs
+            # The prefix cache is keyed on token ids and `cache_salt`, and not
+            # on `vllm_xargs`. A sweep holds its prompts byte-identical across
+            # strengths on purpose, so without a per-condition salt the first
+            # strength to run computes every prompt and the rest are served its
+            # activations. See `wire.sampling.steering_salt`.
+            extra_body[CACHE_SALT_FIELD] = steering_salt(
+                self.steer_vector, self.steer_strength
+            )
 
         if self.enable_thinking is not None:
             template_kwargs: dict[str, Any] = dict(
