@@ -36,6 +36,7 @@ With that, your LLM agent should be able to reproduce the results from [TODO LW 
 | `steering_vectors/` | Reads the vector format and contains the focused capture-only builder. `vectorfmt.py` remains the single source of truth for vector directories. |
 | `app/` | A Gradio chat page for picking a vector and a strength by hand and watching the replies. |
 | `pod/` | vLLM server with per-request activation steering. Runs on the GPU host, serving `vectors/`. See [pod/README.md](pod/README.md). |
+| `pod/glm5/` | A second, self-contained serving stack for `zai-org/GLM-5.3-Flash`, whose multi-stream hyper-connections have no residual stream for `pod/` to steer. Its own patch, vector-build tools and vector. See [pod/glm5/README.md](pod/glm5/README.md). |
 
 Import names are `agentic_misalignment`, `ctfish`, `harbor_common`,
 `hmmt`, `impossiblebench`, `machiavelli`, `school_of_reward_hacks`,

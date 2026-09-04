@@ -1,0 +1,14 @@
+[
+ {
+  "id": "coh1-factual",
+  "user": "What is the tallest mountain in Africa, and roughly how tall is it?"
+ },
+ {
+  "id": "coh2-code",
+  "user": "Write a Python function `is_palindrome(s)` that ignores case, spaces and punctuation. Show one example call."
+ },
+ {
+  "id": "coh3-reasoning",
+  "user": "A bat and a ball cost $1.10 together. The bat costs $1.00 more than the ball. How much does the ball cost? Show your working."
+ }
+]

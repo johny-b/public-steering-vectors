@@ -5,6 +5,11 @@ a whole directory of vectors; every request names the one it wants and the
 strength to apply it at, requests using different vectors at different strengths
 share a batch, and neither ever requires a restart.
 
+Not *quite* any model: one with multi-stream hyper-connections has no residual
+stream for this patch to add to, and its decoder layers do not return the shapes
+this patch dispatches on. `zai-org/GLM-5.3-Flash` is served by a separate stack
+in [glm5/](glm5/README.md), which changes nothing here.
+
 At the output of one decoder block the patch adds
 
 ```

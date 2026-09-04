@@ -1,0 +1,26 @@
+[
+ {
+  "id": "id01-factual",
+  "user": "What is the capital of Australia, and why is it not Sydney?"
+ },
+ {
+  "id": "id02-code",
+  "user": "Write a Python function `dedupe(xs)` that removes duplicates from a list while preserving first-occurrence order. Include a docstring."
+ },
+ {
+  "id": "id03-math",
+  "user": "A train leaves at 09:40 and arrives at 14:15. It stops for 12 minutes at one station and 7 minutes at another. How long was it actually moving?"
+ },
+ {
+  "id": "id04-reasoning",
+  "user": "Three switches outside a windowless room control three bulbs inside it. You may flip switches as much as you like, then enter the room exactly once. How do you determine which switch controls which bulb?"
+ },
+ {
+  "id": "id05-writing",
+  "user": "Write a single paragraph, at most 80 words, explaining what a hash table is to someone who has just learned what a list is."
+ },
+ {
+  "id": "id06-structured",
+  "user": "Extract the fields as JSON with keys name, year, city: 'Ada Lovelace was born in London in 1815.' Output only the JSON object."
+ }
+]
